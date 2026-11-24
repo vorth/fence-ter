@@ -4,6 +4,9 @@
   --bg: #f5f6f8;
   --screen-bg: #dcdde0;
   --card: #ffffff;
+  /* Job rows, against the list card, so the swipe shows what moves. */
+  --row: #eceef1;
+  --row-press: #e0e3e7;
   --fg: #1a1a2e;
   --muted: #6b7280;
   --accent: #2563eb;
@@ -20,6 +23,8 @@
     --bg: #0f1117;
     --screen-bg: #0a0c10;
     --card: #1a1d27;
+    --row: #262a36;
+    --row-press: #2f3442;
     --fg: #f3f4f6;
     --muted: #9ca3af;
     --accent: #3b82f6;
@@ -90,7 +95,8 @@ main.card {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 0.25rem 0;
+  /* The job list spaces its own rows. */
+  padding: 0;
 }
 
 .empty {
@@ -102,21 +108,72 @@ main.card {
 .job-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
+/* Not clipped: the sliding content keeps all four rounded corners, and is
+   only cut off where it leaves the list card. (Sliding left creates no
+   scrollable overflow.) */
 .job-list li {
+  position: relative;
+}
+
+/* The row's visible face, which slides left to uncover the delete button.
+   Vertical drags still scroll the list (pan-y); horizontal ones are ours. */
+.row-content {
+  position: relative;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--row);
   cursor: pointer;
+  touch-action: pan-y;
+  transition: transform 0.25s ease-out;
 }
 
-.job-list li:last-child {
-  border-bottom: none;
+.row-content.dragging {
+  transition: none;
 }
 
-.job-list li:active {
-  background: var(--border);
+.row-content:active {
+  background: var(--row-press);
+}
+
+/* Behind the content, at the row's right end; as wide as the slide. */
+.row-delete {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.trash-circle {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger);
+}
+
+.trash-circle svg {
+  width: 1.4rem;
+  height: 1.4rem;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .row-top {
@@ -125,7 +182,6 @@ main.card {
   gap: 1rem;
 }
 
-.count,
 .row-sub {
   color: var(--muted);
   font-size: 0.85rem;
@@ -135,45 +191,104 @@ main.card {
   margin-top: 0.2rem;
 }
 
-.icon {
-  width: 2.5rem;
-  height: 2.5rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.5;
-  stroke-linecap: round;
+/* A job's total run length, in the list. */
+.total {
+  flex: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
-/* The big + button. */
-.fab {
+/* The big New Job button. */
+.new-job-btn {
   flex: none;
-  align-self: center;
-  width: 5rem;
-  height: 5rem;
+  width: 100%;
+  padding: 1.1rem;
   border: none;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  border-radius: 1rem;
+  font-size: 1.3rem;
+  font-weight: 700;
   color: #fff;
   background: var(--accent);
   box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
 }
 
-.fab:active {
+.new-job-btn:active {
   background: var(--accent-press);
 }
 
 /* Waiting for a GPS fix. */
-.fab.busy {
-  opacity: 0.6;
-  animation: pulse 1s ease-in-out infinite alternate;
+.new-job-btn.busy {
+  opacity: 0.7;
 }
 
-@keyframes pulse {
-  to {
-    transform: scale(0.92);
-  }
+/* New Job / Edit Job. Sits near the top so the keyboard doesn't cover it. */
+.form-dialog {
+  width: calc(100% - 2rem);
+  max-width: 24rem;
+  margin: max(3rem, env(safe-area-inset-top)) auto auto;
+  padding: 1.25rem;
+  border: none;
+  border-radius: 1rem;
+  color: var(--fg);
+  background: var(--card);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+}
+
+.form-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.form-dialog h2 {
+  margin: 0 0 1rem;
+  font-size: 1.2rem;
+}
+
+.form-dialog label {
+  display: block;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* 16px or more, so iOS doesn't zoom in on focus. */
+.form-dialog input,
+.form-dialog textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.form-dialog textarea {
+  resize: vertical;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.dialog-actions button {
+  padding: 0.6rem 1.2rem;
+  border: none;
+  border-radius: 0.6rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+}
+
+.dialog-actions .secondary-btn {
+  color: var(--fg);
+  background: var(--border);
 }
 
 .text-btn {
@@ -277,6 +392,34 @@ main.card {
 
 .job-info {
   padding: 1rem;
+}
+
+/* Collapsed unless opened; hidden when the job has no description. */
+/* Time, place and description; collapsed unless opened. */
+.job-details {
+  margin-top: 0.4rem;
+}
+
+.job-details summary {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+/* Tap to edit, like the name. */
+.job-description {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+.job-description.placeholder {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .job-info p {

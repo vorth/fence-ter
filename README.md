@@ -21,7 +21,9 @@ After changing anything in `src/`, run `npm run build && npx cap copy`.
 
 ## Using it
 
-1. Tap **+** to create a job. It is stamped with the current time and GPS position.
+1. Tap **New Job**, enter a name and description, and tap **Create**. The job is
+   stamped with the current time and GPS position. Tap the name later to edit
+   them.
 2. On the job screen, tap **Measure** to set the starting point.
 3. Move to the next point and tap **Record point**. Repeat for each point.
    Hold the phone still for a moment before each tap.

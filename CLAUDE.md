@@ -80,9 +80,12 @@ keep it in sync.
 
 ## Data model
 
-- `jobs`: `id`, `title` (null → shown as "Job <id>"), `created_at` (epoch ms
-  of the + tap), `latitude`, `longitude`, `accuracy`, `altitude` (all
-  nullable: the job is still created when there's no fix).
+- `jobs`: `id`, `title` (the job's *name* in the UI; null → shown as
+  "Job <id>"), `description` (null when blank), `created_at` (epoch ms of
+  the Create tap), `latitude`, `longitude`, `accuracy`, `altitude` (all
+  nullable: the job is still created when there's no fix). `Job.totalLength`
+  (sum of run lengths, decimal feet) is computed in TS in `getJobs`, not
+  SQL, since SQLite's `sqrt` isn't available on every platform.
 - `measurements`: `id`, `job_id`, `session`, `dx`, `dy`, `dz` (decimal feet;
   x east, y north, z up), `recorded_at`. Each Measure session starts from a
   new origin, so a session's first point is not relative to the previous
@@ -97,11 +100,30 @@ keep it in sync.
 
 ## Behaviour
 
-- **List**: newest first; title, point count, time and coordinates. + takes
-  the time, then waits up to 15 s for a high-accuracy fix, inserts, and opens
-  the job.
+- **List**: newest first; each row shows only the name, the date (no time)
+  and the total run length in feet and inches.
+- **Swipe to delete**: each `li` holds a `.row-delete` button (white trash
+  on a red circle, 88 px wide) under a sliding `.row-content`. Pointer
+  events on the list: after 8 px the drag's direction is decided; vertical
+  ones are left to scroll (`touch-action: pan-y`), horizontal ones capture
+  the pointer and move the content (resisting past −88 px). Released past
+  halfway it stays open (`openRow`), else closes. One open row at a time;
+  any other tap closes it without opening the job, and the click after a
+  drag is ignored (`suppressClick`, expiring after 400 ms). The trash
+  confirms, like Delete on the job screen.
+- **New Job** (a full-width button, not "+") opens a dialog with Name and
+  Description (separate fields; return in Name moves to Description, since
+  it would otherwise submit via the first button, Cancel). Create takes the
+  time, waits up to 15 s for a high-accuracy fix (button reads "Finding
+  location…"), inserts, and opens the job. The same dialog, titled Edit Job
+  with Save, opens when the job's name or description is tapped on its
+  screen.
 - **Job screen** slides in from the right; ‹ Jobs, Escape or Android back
-  close it. Tap the title to rename (`prompt`); Delete confirms.
+  close it. Under the name, one `<details>` toggle ("Details", collapsed
+  each time a job is opened) holds the date and time, the coordinates and
+  the description (no label of its own; "Add a description", muted, when
+  blank). Tapping the name or the description opens the Edit Job dialog,
+  focused on that field. Delete confirms.
 - **Measure button**: first tap starts the tracker (origin); each tap records
   the displacement since the previous point; a long press (600 ms) ends.
   Pointer events, not click, so a long press isn't also a tap. Backgrounding

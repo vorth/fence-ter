@@ -1,7 +1,7 @@
 import './style.css';
 import { App } from '@capacitor/app';
 import { Geolocation } from '@capacitor/geolocation';
-import { getStore, type Fix, type Job, type JobsStore, type Measurement } from './db';
+import { getStore, type Fix, type Job, type JobDetails, type JobsStore, type Measurement } from './db';
 import { createTracker, type Tracker, type TrackerStatus, type Vec3 } from './tracker';
 import { drawJob, enablePinch, runAt, type LiveSegment, type View } from './drawing';
 
@@ -17,13 +17,26 @@ app.innerHTML = `
   </header>
   <main class="card">
     <ol id="job-list" class="job-list"></ol>
-    <p id="empty" class="empty" hidden>No jobs yet. Tap + to start one.</p>
+    <p id="empty" class="empty" hidden>No jobs yet. Tap New Job to start one.</p>
   </main>
-  <button id="new-job" type="button" class="fab" aria-label="New job">
-    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 4v16M4 12h16" />
-    </svg>
-  </button>
+  <button id="new-job" type="button" class="new-job-btn">New Job</button>
+  <dialog id="job-form" class="form-dialog" aria-labelledby="job-form-title">
+    <form method="dialog">
+      <h2 id="job-form-title"></h2>
+      <label>
+        Name
+        <input id="job-name" type="text" autocapitalize="words" enterkeyhint="next" />
+      </label>
+      <label>
+        Description
+        <textarea id="job-description" rows="4" autocapitalize="sentences"></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button type="submit" value="cancel" class="secondary-btn">Cancel</button>
+        <button id="job-form-save" type="submit" value="save"></button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="job" class="screen" aria-labelledby="job-title">
     <header class="sheet-bar">
       <button id="job-back" type="button" class="text-btn">‹ Jobs</button>
@@ -34,8 +47,12 @@ app.innerHTML = `
     <div class="screen-body">
       <section class="card job-info">
         <button id="job-rename" type="button" class="job-heading"></button>
-        <p id="job-time"></p>
-        <p id="job-place"></p>
+        <details id="job-details" class="job-details">
+          <summary>Details</summary>
+          <p id="job-time"></p>
+          <p id="job-place"></p>
+          <button id="job-description-text" type="button" class="job-description"></button>
+        </details>
         <p id="job-total" class="run-length"></p>
         <p id="job-total-label" class="units"></p>
       </section>
@@ -64,6 +81,11 @@ app.innerHTML = `
 const listEl = document.querySelector<HTMLOListElement>('#job-list')!;
 const emptyEl = document.querySelector<HTMLParagraphElement>('#empty')!;
 const newJobBtn = document.querySelector<HTMLButtonElement>('#new-job')!;
+const jobFormEl = document.querySelector<HTMLDialogElement>('#job-form')!;
+const jobFormTitleEl = document.querySelector<HTMLHeadingElement>('#job-form-title')!;
+const jobNameIn = document.querySelector<HTMLInputElement>('#job-name')!;
+const jobDescriptionIn = document.querySelector<HTMLTextAreaElement>('#job-description')!;
+const jobFormSaveBtn = document.querySelector<HTMLButtonElement>('#job-form-save')!;
 const jobEl = document.querySelector<HTMLDialogElement>('#job')!;
 const cameraEl = document.querySelector<HTMLDivElement>('#camera')!;
 const jobTitleEl = document.querySelector<HTMLHeadingElement>('#job-title')!;
@@ -72,6 +94,8 @@ const deleteBtn = document.querySelector<HTMLButtonElement>('#job-delete')!;
 const renameBtn = document.querySelector<HTMLButtonElement>('#job-rename')!;
 const timeEl = document.querySelector<HTMLParagraphElement>('#job-time')!;
 const placeEl = document.querySelector<HTMLParagraphElement>('#job-place')!;
+const detailsEl = document.querySelector<HTMLDetailsElement>('#job-details')!;
+const descriptionBtn = document.querySelector<HTMLButtonElement>('#job-description-text')!;
 const totalEl = document.querySelector<HTMLParagraphElement>('#job-total')!;
 const totalLabelEl = document.querySelector<HTMLParagraphElement>('#job-total-label')!;
 const drawingEl = document.querySelector<SVGSVGElement>('#drawing')!;
@@ -94,6 +118,9 @@ let measurements: Measurement[] = [];
 // ---------- Formatting ----------
 
 const jobTitle = (j: Job) => j.title ?? `Job ${j.id}`;
+
+const formatDate = (ms: number) =>
+  new Date(ms).toLocaleDateString(undefined, { dateStyle: 'medium' });
 
 const formatTime = (ms: number) =>
   new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -134,23 +161,42 @@ function bearing(dx: number, dy: number): string {
 
 // ---------- Job list ----------
 
+const TRASH_ICON = `
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6M14 11v6" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </svg>`;
+
+// Each row is a delete button with the row's content over it; dragging the
+// content left uncovers the button.
 function renderList() {
+  openRow = null;
   listEl.replaceChildren(
     ...jobs.map((j) => {
       const li = document.createElement('li');
       li.dataset.id = String(j.id);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'row-delete';
+      del.setAttribute('aria-label', `Delete ${jobTitle(j)}`);
+      del.innerHTML = `<span class="trash-circle">${TRASH_ICON}</span>`;
+      const content = document.createElement('div');
+      content.className = 'row-content';
       const top = document.createElement('div');
       top.className = 'row-top';
       const title = document.createElement('strong');
       title.textContent = jobTitle(j);
-      const count = document.createElement('span');
-      count.className = 'count';
-      count.textContent = j.measurementCount === 1 ? '1 run' : `${j.measurementCount} runs`;
-      top.append(title, count);
+      const total = document.createElement('span');
+      total.className = 'total';
+      total.textContent = feetInches(j.totalLength);
+      top.append(title, total);
       const sub = document.createElement('div');
       sub.className = 'row-sub';
-      sub.textContent = `${formatTime(j.createdAt)} · ${formatPlace(j)}`;
-      li.append(top, sub);
+      sub.textContent = formatDate(j.createdAt);
+      content.append(top, sub);
+      li.append(del, content);
       return li;
     }),
   );
@@ -162,10 +208,123 @@ async function refreshList() {
   renderList();
 }
 
-listEl.addEventListener('click', (e) => {
-  const li = (e.target as Element).closest<HTMLLIElement>('li[data-id]');
+// ---------- Swipe to delete ----------
+
+// How far an open row slides, uncovering the delete button.
+const REVEAL_PX = 88;
+// Movement before a touch counts as a drag, in either direction.
+const DRAG_SLOP_PX = 8;
+
+/** The content of the row slid open, if any. */
+let openRow: HTMLElement | null = null;
+let drag: {
+  content: HTMLElement;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  /** Where the content started: 0, or -REVEAL_PX if it was open. */
+  base: number;
+  dx: number;
+  /** Null until the drag's direction is known; vertical drags scroll the list. */
+  horizontal: boolean | null;
+} | null = null;
+// A drag ends with a click on the row, which mustn't open the job.
+let suppressClick = false;
+
+function slide(content: HTMLElement, x: number) {
+  content.style.transform = x ? `translateX(${x}px)` : '';
+}
+
+function closeRow() {
+  if (openRow) slide(openRow, 0);
+  openRow = null;
+}
+
+listEl.addEventListener('pointerdown', (e) => {
+  const content = (e.target as Element).closest<HTMLElement>('.row-content');
+  if (!content) return;
+  drag = {
+    content,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    base: content === openRow ? -REVEAL_PX : 0,
+    dx: 0,
+    horizontal: null,
+  };
+});
+
+listEl.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  const dx = e.clientX - drag.startX;
+  const dy = e.clientY - drag.startY;
+  if (drag.horizontal === null) {
+    if (Math.hypot(dx, dy) < DRAG_SLOP_PX) return;
+    drag.horizontal = Math.abs(dx) > Math.abs(dy);
+    if (!drag.horizontal) {
+      drag = null;
+      return;
+    }
+    if (openRow && openRow !== drag.content) closeRow();
+    drag.content.setPointerCapture(e.pointerId);
+    drag.content.classList.add('dragging');
+  }
+  drag.dx = dx;
+  // Follows the finger, with resistance past the open position.
+  let x = Math.min(0, drag.base + dx);
+  if (x < -REVEAL_PX) x = -REVEAL_PX + (x + REVEAL_PX) / 3;
+  slide(drag.content, x);
+});
+
+function endDrag(e: PointerEvent) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  const { content, base, dx, horizontal } = drag;
+  drag = null;
+  if (!horizontal) return;
+  content.classList.remove('dragging');
+  // Ignore the click that may follow, but not a later tap if none does.
+  suppressClick = true;
+  setTimeout(() => (suppressClick = false), 400);
+  if (base + dx < -REVEAL_PX / 2) {
+    slide(content, -REVEAL_PX);
+    openRow = content;
+  } else {
+    slide(content, 0);
+    if (openRow === content) openRow = null;
+  }
+}
+
+listEl.addEventListener('pointerup', endDrag);
+listEl.addEventListener('pointercancel', endDrag);
+
+listEl.addEventListener('click', async (e) => {
+  if (suppressClick) {
+    suppressClick = false;
+    return;
+  }
+  const target = e.target as Element;
+  const li = target.closest<HTMLLIElement>('li[data-id]');
   const job = li && jobs.find((j) => j.id === Number(li.dataset.id));
+  if (target.closest('.row-delete')) {
+    if (job && confirm(`Delete “${jobTitle(job)}” and its measurements?`)) {
+      await store.deleteJob(job.id);
+      await refreshList();
+    } else {
+      closeRow();
+    }
+    return;
+  }
+  // A tap while a row is open just closes it.
+  if (openRow) {
+    closeRow();
+    return;
+  }
   if (job) openJob(job);
+});
+
+// A tap anywhere else closes an open row too.
+document.addEventListener('pointerdown', (e) => {
+  if (openRow && !openRow.parentElement!.contains(e.target as Node)) closeRow();
 });
 
 async function currentFix(): Promise<Fix | null> {
@@ -187,14 +346,56 @@ async function currentFix(): Promise<Fix | null> {
   }
 }
 
+/**
+ * Asks for a job's name and description, starting from `initial` (a new job
+ * when null). Resolves with what was entered, blanks as null, or null if
+ * cancelled.
+ */
+function askJobDetails(
+  initial: JobDetails | null,
+  focus: 'name' | 'description' = 'name',
+): Promise<JobDetails | null> {
+  jobFormTitleEl.textContent = initial ? 'Edit Job' : 'New Job';
+  jobFormSaveBtn.textContent = initial ? 'Save' : 'Create';
+  jobNameIn.value = initial?.title ?? '';
+  jobDescriptionIn.value = initial?.description ?? '';
+  jobFormEl.returnValue = '';
+  jobFormEl.showModal();
+  (focus === 'description' ? jobDescriptionIn : jobNameIn).focus();
+  return new Promise((resolve) => {
+    jobFormEl.addEventListener('close', () => {
+      if (jobFormEl.returnValue !== 'save') {
+        resolve(null);
+        return;
+      }
+      resolve({
+        title: jobNameIn.value.trim() || null,
+        description: jobDescriptionIn.value.trim() || null,
+      });
+    }, { once: true });
+  });
+}
+
+// Return in the name moves to the description. Otherwise it would submit
+// the form through its first button, Cancel.
+jobNameIn.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    jobDescriptionIn.focus();
+  }
+});
+
 newJobBtn.addEventListener('click', async () => {
-  // The job's time is the moment of the tap; the fix may take a few seconds.
+  const details = await askJobDetails(null);
+  if (!details) return;
+  // The job's time is the moment it's created; the fix may take a few seconds.
   const createdAt = Date.now();
   newJobBtn.disabled = true;
   newJobBtn.classList.add('busy');
+  newJobBtn.textContent = 'Finding location…';
   try {
     const fix = await currentFix();
-    const job = await store.insertJob(createdAt, fix);
+    const job = await store.insertJob(createdAt, fix, details);
     await refreshList();
     await openJob(job);
     if (!fix) alert('Couldn’t get a GPS fix, so the job was saved without a location.');
@@ -203,6 +404,7 @@ newJobBtn.addEventListener('click', async () => {
   } finally {
     newJobBtn.disabled = false;
     newJobBtn.classList.remove('busy');
+    newJobBtn.textContent = 'New Job';
   }
 });
 
@@ -214,6 +416,8 @@ function renderJob() {
   renameBtn.textContent = jobTitle(current);
   timeEl.textContent = formatTime(current.createdAt);
   placeEl.textContent = formatPlace(current);
+  descriptionBtn.textContent = current.description ?? 'Add a description';
+  descriptionBtn.classList.toggle('placeholder', !current.description);
 }
 
 // The run shown in the detail panel (an index into measurements), or null.
@@ -297,6 +501,8 @@ async function openJob(job: Job) {
   measurements = await store.getMeasurements(job.id);
   pinchedView = null;
   selectedRun = null;
+  // Details start collapsed each time a job is opened.
+  detailsEl.open = false;
   renderJob();
   renderMeasurements();
   showMeasureIdle();
@@ -332,14 +538,18 @@ App.addListener('backButton', () => {
   else void App.exitApp();
 });
 
-renameBtn.addEventListener('click', async () => {
+// Tapping the name or the description edits both, in the job dialog.
+async function editJob(focus: 'name' | 'description') {
   if (!current) return;
-  const text = prompt('Job title', current.title ?? '');
-  if (text == null) return;
-  current.title = text.trim() || null;
-  await store.setTitle(current.id, current.title);
+  const details = await askJobDetails(current, focus);
+  if (!details || !current) return;
+  Object.assign(current, details);
+  await store.setDetails(current.id, details);
   renderJob();
-});
+}
+
+renameBtn.addEventListener('click', () => void editJob('name'));
+descriptionBtn.addEventListener('click', () => void editJob('description'));
 
 deleteBtn.addEventListener('click', async () => {
   if (!current) return;

@@ -8,8 +8,10 @@ import {
 /** A fencing job, as stored in the `jobs` table. */
 export interface Job {
   id: number;
-  /** Set by the user; null until then (shown as "Job <id>"). */
+  /** The job's name, set by the user; null when left blank (shown as "Job <id>"). */
   title: string | null;
+  /** Free text set by the user; null when left blank. */
+  description: string | null;
   /** Epoch milliseconds when the job was created. */
   createdAt: number;
   /** Where the job was created; null when no GPS fix could be had. */
@@ -19,9 +21,12 @@ export interface Job {
   accuracy: number | null;
   /** Metres; null when the device does not report altitude. */
   altitude: number | null;
-  /** Number of measurements recorded for the job. */
-  measurementCount: number;
+  /** Sum of the lengths of all its runs (measurements), in decimal feet. */
+  totalLength: number;
 }
+
+/** The fields of a job the user types in. */
+export type JobDetails = Pick<Job, 'title' | 'description'>;
 
 /** Where a job was created: a GPS fix, as captured. */
 export type Fix = Pick<Job, 'latitude' | 'longitude' | 'accuracy' | 'altitude'>;
@@ -52,8 +57,8 @@ export interface JobsStore {
   init(): Promise<void>;
   /** All jobs, newest first. */
   getJobs(): Promise<Job[]>;
-  insertJob(createdAt: number, fix: Fix | null): Promise<Job>;
-  setTitle(id: number, title: string | null): Promise<void>;
+  insertJob(createdAt: number, fix: Fix | null, details: JobDetails): Promise<Job>;
+  setDetails(id: number, details: JobDetails): Promise<void>;
   /** Deletes the job and its measurements. */
   deleteJob(id: number): Promise<void>;
   /** The job's measurements, in the order recorded. */
@@ -75,6 +80,7 @@ const UPGRADE_STATEMENTS = [
       `CREATE TABLE IF NOT EXISTS jobs (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         title       TEXT,
+        description TEXT,
         created_at  INTEGER NOT NULL,
         latitude    REAL,
         longitude   REAL,
@@ -99,24 +105,25 @@ const UPGRADE_STATEMENTS = [
 interface JobRow {
   id: number;
   title: string | null;
+  description: string | null;
   created_at: number;
   latitude: number | null;
   longitude: number | null;
   accuracy: number | null;
   altitude: number | null;
-  measurement_count: number;
 }
 
-function rowToJob(r: JobRow): Job {
+function rowToJob(r: JobRow, totalLength: number): Job {
   return {
     id: r.id,
     title: r.title,
+    description: r.description,
     createdAt: r.created_at,
     latitude: r.latitude,
     longitude: r.longitude,
     accuracy: r.accuracy,
     altitude: r.altitude,
-    measurementCount: r.measurement_count,
+    totalLength,
   };
 }
 
@@ -142,8 +149,9 @@ function rowToMeasurement(r: MeasurementRow): Measurement {
   };
 }
 
-const JOB_COLUMNS = `id, title, created_at, latitude, longitude, accuracy, altitude,
-  (SELECT COUNT(*) FROM measurements m WHERE m.job_id = jobs.id) AS measurement_count`;
+const JOB_COLUMNS = 'id, title, description, created_at, latitude, longitude, accuracy, altitude';
+
+const runLength = (m: Displacement) => Math.hypot(m.dx, m.dy, m.dz);
 
 /** Real SQLite-backed store for native (iOS/Android) platforms. */
 class SqliteJobsStore implements JobsStore {
@@ -171,24 +179,33 @@ class SqliteJobsStore implements JobsStore {
     const res = await this.conn().query(
       `SELECT ${JOB_COLUMNS} FROM jobs ORDER BY created_at DESC;`,
     );
-    return ((res.values ?? []) as JobRow[]).map(rowToJob);
+    // Run lengths are summed here: SQLite's sqrt() isn't available everywhere.
+    const runs = await this.conn().query(`SELECT job_id, dx, dy, dz FROM measurements;`);
+    const totals = new Map<number, number>();
+    for (const m of (runs.values ?? []) as (Displacement & { job_id: number })[]) {
+      totals.set(m.job_id, (totals.get(m.job_id) ?? 0) + runLength(m));
+    }
+    return ((res.values ?? []) as JobRow[]).map((r) => rowToJob(r, totals.get(r.id) ?? 0));
   }
 
-  async insertJob(createdAt: number, fix: Fix | null): Promise<Job> {
+  async insertJob(createdAt: number, fix: Fix | null, details: JobDetails): Promise<Job> {
     const res = await this.conn().run(
-      `INSERT INTO jobs (created_at, latitude, longitude, accuracy, altitude)
-       VALUES (?, ?, ?, ?, ?);`,
-      [createdAt, fix?.latitude ?? null, fix?.longitude ?? null, fix?.accuracy ?? null,
-        fix?.altitude ?? null],
+      `INSERT INTO jobs (title, description, created_at, latitude, longitude, accuracy, altitude)
+       VALUES (?, ?, ?, ?, ?, ?, ?);`,
+      [details.title, details.description, createdAt, fix?.latitude ?? null,
+        fix?.longitude ?? null, fix?.accuracy ?? null, fix?.altitude ?? null],
     );
     const id = res.changes?.lastId;
     if (id == null) throw new Error('Insert did not return a job id.');
     const rows = await this.conn().query(`SELECT ${JOB_COLUMNS} FROM jobs WHERE id = ?;`, [id]);
-    return rowToJob((rows.values as JobRow[])[0]);
+    return rowToJob((rows.values as JobRow[])[0], 0);
   }
 
-  async setTitle(id: number, title: string | null): Promise<void> {
-    await this.conn().run(`UPDATE jobs SET title = ? WHERE id = ?;`, [title, id]);
+  async setDetails(id: number, details: JobDetails): Promise<void> {
+    await this.conn().run(
+      `UPDATE jobs SET title = ?, description = ? WHERE id = ?;`,
+      [details.title, details.description, id],
+    );
   }
 
   async deleteJob(id: number): Promise<void> {
@@ -224,7 +241,7 @@ class SqliteJobsStore implements JobsStore {
  * setup. Data does NOT persist across reloads.
  */
 class WebStubJobsStore implements JobsStore {
-  private jobs: Omit<Job, 'measurementCount'>[] = [];
+  private jobs: Omit<Job, 'totalLength'>[] = [];
   private measurements: Measurement[] = [];
   private nextJobId = 1;
   private nextMeasurementId = 1;
@@ -236,20 +253,21 @@ class WebStubJobsStore implements JobsStore {
     );
   }
 
-  private withCount(j: Omit<Job, 'measurementCount'>): Job {
-    return { ...j, measurementCount: this.measurements.filter((m) => m.jobId === j.id).length };
+  private withTotal(j: Omit<Job, 'totalLength'>): Job {
+    const runs = this.measurements.filter((m) => m.jobId === j.id);
+    return { ...j, totalLength: runs.reduce((sum, m) => sum + runLength(m), 0) };
   }
 
   async getJobs(): Promise<Job[]> {
     return [...this.jobs]
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map((j) => this.withCount(j));
+      .map((j) => this.withTotal(j));
   }
 
-  async insertJob(createdAt: number, fix: Fix | null): Promise<Job> {
+  async insertJob(createdAt: number, fix: Fix | null, details: JobDetails): Promise<Job> {
     const job = {
       id: this.nextJobId++,
-      title: null,
+      ...details,
       createdAt,
       latitude: fix?.latitude ?? null,
       longitude: fix?.longitude ?? null,
@@ -257,12 +275,12 @@ class WebStubJobsStore implements JobsStore {
       altitude: fix?.altitude ?? null,
     };
     this.jobs.push(job);
-    return this.withCount(job);
+    return this.withTotal(job);
   }
 
-  async setTitle(id: number, title: string | null): Promise<void> {
+  async setDetails(id: number, details: JobDetails): Promise<void> {
     const job = this.jobs.find((j) => j.id === id);
-    if (job) job.title = title;
+    if (job) Object.assign(job, details);
   }
 
   async deleteJob(id: number): Promise<void> {
