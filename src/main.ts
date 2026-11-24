@@ -37,8 +37,8 @@ app.innerHTML = `
         <input id="job-name" type="text" autocapitalize="words" enterkeyhint="next" />
       </label>
       <label>
-        Description
-        <textarea id="job-description" rows="4" autocapitalize="sentences"></textarea>
+        Notes
+        <textarea id="job-description" rows="18" autocapitalize="sentences"></textarea>
       </label>
       <div class="dialog-actions">
         <button type="submit" value="cancel" class="secondary-btn">Cancel</button>

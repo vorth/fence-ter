@@ -118,7 +118,8 @@ keep it in sync.
   drag is ignored (`suppressClick`, expiring after 400 ms). The trash
   confirms, like Delete on the job screen.
 - **New Job** (a full-width button, not "+") opens a dialog with Name and
-  Description (separate fields; return in Name moves to Description, since
+  Notes (separate fields, Notes 18 rows tall, at most half the screen;
+  stored as `description`; return in Name moves to Notes, since
   it would otherwise submit via the first button, Cancel). Create takes the
   time, waits up to 15 s for a high-accuracy fix (button reads "Finding
   location…"), inserts, and opens the job. The same dialog, titled Edit Job

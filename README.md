@@ -22,7 +22,7 @@ After changing anything in `src/`, run `npm run build && npx cap copy`.
 
 ## Using it
 
-1. Tap **New Job**, enter a name and description, and tap **Create**. The job is
+1. Tap **New Job**, enter a name and notes, and tap **Create**. The job is
    stamped with the current time and GPS position. Tap the name later to edit
    them.
 2. Every job starts with one terminal, **t0**, its origin. Stand at a terminal
