@@ -1,0 +1,512 @@
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light dark;
+  --bg: #f5f6f8;
+  --screen-bg: #dcdde0;
+  --card: #ffffff;
+  --fg: #1a1a2e;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-press: #1d4ed8;
+  --danger: #dc2626;
+  --border: #e5e7eb;
+  --measuring: #16a34a;
+  --measuring-press: #15803d;
+  --warning: #d97706;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1117;
+    --screen-bg: #0a0c10;
+    --card: #1a1d27;
+    --fg: #f3f4f6;
+    --muted: #9ca3af;
+    --accent: #3b82f6;
+    --accent-press: #2563eb;
+    --danger: #ef4444;
+    --border: #2a2e3a;
+    --measuring: #16a34a;
+    --measuring-press: #15803d;
+    --warning: #f59e0b;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Full-height column: the job list scrolls, the + button stays pinned at the
+   bottom. */
+#app {
+  /* Fallback for WebViews older than Chrome 108, which lack dvh. */
+  height: 100%;
+  height: 100dvh;
+  max-width: 26rem;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: max(1rem, env(safe-area-inset-top)) 1rem
+    max(1rem, env(safe-area-inset-bottom));
+}
+
+.toolbar h1 {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+main.card {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.25rem 0;
+}
+
+.empty {
+  margin: 1.5rem 1rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.job-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.job-list li {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.job-list li:last-child {
+  border-bottom: none;
+}
+
+.job-list li:active {
+  background: var(--border);
+}
+
+.row-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.count,
+.row-sub {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.row-sub {
+  margin-top: 0.2rem;
+}
+
+.icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+/* The big + button. */
+.fab {
+  flex: none;
+  align-self: center;
+  width: 5rem;
+  height: 5rem;
+  border: none;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: var(--accent);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+}
+
+.fab:active {
+  background: var(--accent-press);
+}
+
+/* Waiting for a GPS fix. */
+.fab.busy {
+  opacity: 0.6;
+  animation: pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes pulse {
+  to {
+    transform: scale(0.92);
+  }
+}
+
+.text-btn {
+  border: none;
+  background: none;
+  padding: 0.5rem;
+  color: var(--accent);
+  font-size: 1.06rem;
+}
+
+.text-btn.danger {
+  color: var(--danger);
+}
+
+/* Job screen: full-screen, slides in from the right like an iOS navigation
+   push. */
+.screen {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--fg);
+  background: var(--screen-bg);
+  border: none;
+  transform: translateX(100%);
+  transition: transform 0.3s ease-out;
+}
+
+.screen[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.screen.shown {
+  transform: none;
+}
+
+/* Transparent: it only blocks taps on the list. Dimming would switch on and
+   off at once, flashing the list as the screen slides in and out. */
+.screen::backdrop {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen {
+    transition: none;
+  }
+}
+
+.sheet-bar {
+  flex: none;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: max(0.75rem, env(safe-area-inset-top)) 0.5rem 0.75rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.sheet-bar h2 {
+  margin: 0;
+  font-size: 1.06rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-bar .text-btn:first-child {
+  justify-self: start;
+}
+
+.sheet-bar .text-btn:last-child {
+  justify-self: end;
+}
+
+.screen-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  max-width: 26rem;
+  margin: 0 auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Cards keep their natural height and the body scrolls; shrinking them
+   clipped the drawing as the table grew. */
+.screen-body > * {
+  flex: none;
+}
+
+.job-info {
+  padding: 1rem;
+}
+
+.job-info p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
+/* The title; tap to rename. */
+.job-heading {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.drawing-card {
+  position: relative;
+  padding: 0.5rem 0 0;
+  overflow: hidden;
+}
+
+/* Square plan view; strokes stay the same width whatever the zoom. One
+   finger scrolls the page (pan-y); two fingers pinch the drawing, handled
+   in drawing.ts, not by the browser. */
+.drawing {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  touch-action: pan-y;
+}
+
+/* Back to fitting all the points, after a pinch. */
+.fit-btn {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.drawing line,
+.drawing polyline,
+.drawing circle {
+  vector-effect: non-scaling-stroke;
+}
+
+.drawing .grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.drawing .run {
+  stroke: var(--fg);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.drawing .run.selected {
+  stroke: var(--accent);
+  stroke-width: 5;
+}
+
+.drawing .terminal {
+  fill: var(--fg);
+}
+
+/* Run and terminal labels; the halo keeps them readable over lines. */
+.drawing .label {
+  fill: var(--muted);
+  font-weight: 600;
+  stroke: var(--card);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  vector-effect: non-scaling-stroke;
+}
+
+.drawing .label.selected {
+  fill: var(--accent);
+}
+
+.drawing .north path {
+  fill: var(--accent);
+}
+
+.drawing .north text {
+  fill: var(--accent);
+  font-weight: 700;
+}
+
+.drawing .live-path {
+  stroke: var(--measuring);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 4;
+  stroke-linecap: round;
+}
+
+.drawing .live-point {
+  fill: var(--measuring);
+  opacity: 0.8;
+}
+
+/* Details of the run tapped in the drawing. */
+.run-detail {
+  padding: 0.75rem 1rem;
+  min-height: 5.5rem;
+}
+
+.run-detail h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.run-length {
+  margin: 0.1rem 0 0;
+  font-size: 2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The job's total length, styled like a run's length. */
+.job-info .run-length {
+  margin-top: 0.75rem;
+  color: var(--fg);
+}
+
+.job-info .units {
+  margin: 0;
+}
+
+.run-detail .units {
+  margin: 0.25rem 0 0;
+}
+
+.units {
+  margin: 0.5rem 0.75rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.measure-bar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem max(1rem, env(safe-area-inset-bottom));
+  background: var(--card);
+  border-top: 1px solid var(--border);
+}
+
+.measure-bar p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.live {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tracking quality: good to record, usable but less accurate, or not
+   ready (taps are refused). */
+.live[data-quality="good"] {
+  color: var(--measuring);
+}
+
+.live[data-quality="limited"] {
+  color: var(--warning);
+}
+
+.live[data-quality="lost"] {
+  color: var(--danger);
+}
+
+/* Where the native camera view (ARKit or ARCore) is laid over the page while
+   measuring. Outside .screen-body, because the native view can't scroll. */
+.camera {
+  flex: none;
+  height: 40%;
+  background: #000;
+}
+
+/* The big Measure button. No text selection or callout, so a long press ends
+   measuring instead of selecting the label. */
+.measure-btn {
+  width: 100%;
+  max-width: 24rem;
+  padding: 1.5rem;
+  border: none;
+  border-radius: 1rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+.measure-btn:active {
+  background: var(--accent-press);
+}
+
+.measure-btn.measuring {
+  background: var(--measuring);
+}
+
+.measure-btn.measuring:active {
+  background: var(--measuring-press);
+}
+
+/* Brief confirmation that a point was recorded. */
+.measure-btn.flash {
+  animation: flash 0.4s ease-out;
+}
+
+@keyframes flash {
+  from {
+    box-shadow: 0 0 0 0.6rem rgba(22, 163, 74, 0.45);
+  }
+}
