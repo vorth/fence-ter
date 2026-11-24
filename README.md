@@ -1,8 +1,9 @@
 # Fence Jobs
 
 A Capacitor app (iOS + Android) for recording fencing jobs: each job gets a
-time and GPS location when it is created, and a list of measurements taken
-with the phone's motion sensors, in decimal feet.
+time and GPS location when it is created, and a set of terminals (measured
+points) joined by runs, measured with the phone's camera and motion sensors
+(ARKit or ARCore).
 
 ## Setup
 
@@ -24,13 +25,18 @@ After changing anything in `src/`, run `npm run build && npx cap copy`.
 1. Tap **New Job**, enter a name and description, and tap **Create**. The job is
    stamped with the current time and GPS position. Tap the name later to edit
    them.
-2. On the job screen, tap **Measure** to set the starting point.
-3. Move to the next point and tap **Record point**. Repeat for each point.
-   Hold the phone still for a moment before each tap.
-4. Long-press the button to finish.
+2. Every job starts with one terminal, **t0**, its origin. Stand at a terminal
+   with the phone and tap it in the drawing: the camera starts and measuring
+   begins there.
+3. Walk to the next point and tap **Add terminal**. It records a terminal and
+   keeps measuring from it, so you can carry on along the fence.
+4. Tap **Finish run** to record the last terminal and stop, or **Cancel** to
+   stop without recording.
 
-Measurements are X (east), Y (north) and Z (up), each relative to the
-previous point, in feet. The phone can be held any way up.
+To branch, stand at any earlier terminal and tap it. Each terminal stores its
+X (east), Y (north) and Z (up) position in feet from t0, and which terminal
+it was measured from; run lengths are worked out from those. The phone can be
+held any way up.
 
 Measuring uses ARKit (iPhone) or ARCore (Android): the live camera appears
 at the top of the job screen, and tracking works best when the camera sees
@@ -48,7 +54,7 @@ accurate.
   `ios/App/App/Info.plist`; `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION`
   in `android/app/src/main/AndroidManifest.xml`.
 - Camera (for AR) — `NSCameraUsageDescription` in `Info.plist`; `CAMERA` in
-  `AndroidManifest.xml`, requested when Measure is first tapped.
+  `AndroidManifest.xml`, requested the first time measuring starts.
 - Motion sensors need no permission inside the app.
 
 ## Data

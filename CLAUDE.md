@@ -1,9 +1,10 @@
 # Fence Jobs
 
 Mobile app (Capacitor 8, iOS + Android) that keeps a record of fencing
-**jobs**. Each job has a title, the time and GPS location where it was
-created, and a series of **measurements**: X/Y/Z displacements in decimal
-feet, each relative to the previous point. Measured with ARKit (iOS) or
+**jobs**. Each job has a name, description, the time and GPS location where
+it was created, and a tree of **terminals**: points with X/Y/Z coordinates
+in decimal feet from the job's origin, t0, each but t0 measured from an
+earlier terminal (ending a **run** from it). Measured with ARKit (iOS) or
 ARCore (Android), camera + motion sensors; phones without either fall back
 to motion-sensor dead reckoning, which the user found far too inaccurate.
 Stored locally in SQLite. Early prototype; no users.
@@ -65,8 +66,9 @@ keep it in sync.
 
 - `src/main.ts` — all UI: one `app.innerHTML` template (job list, + button,
   job `<dialog class="screen">`), then plain DOM code.
-- `src/db.ts` — `Job`, `Measurement`, `JobsStore` interface, schema, SQLite
-  store (native) and in-memory stub (web, `npm run dev`).
+- `src/db.ts` — `Job`, `Terminal`, `Point`, `runLength`, `totalLength`,
+  `JobsStore` interface, schema, SQLite store (native) and in-memory stub
+  (web, `npm run dev`).
 - `src/tracker.ts` — `Tracker` interface (`start`/`stop`/`status`,
   `onUpdate`/`onError`; positions in metres east/north/up from the start),
   `SensorTracker` (wraps `MotionTracker`) and `createTracker` (AR if
@@ -75,7 +77,8 @@ keep it in sync.
   plugin interface.
 - `src/motion.ts` — `MotionTracker` (dead reckoning) and
   `requestMotionPermission`.
-- `src/drawing.ts` — `drawJob(svg, measurements, live)`: the plan view.
+- `src/drawing.ts` — `drawJob(svg, terminals, live, view, selected)`: the
+  plan view; `hitTest` (terminal or run under a tap); `enablePinch`.
 - `src/style.css` — light/dark themes via CSS variables, iOS-like look.
 
 ## Data model
@@ -86,15 +89,18 @@ keep it in sync.
   nullable: the job is still created when there's no fix). `Job.totalLength`
   (sum of run lengths, decimal feet) is computed in TS in `getJobs`, not
   SQL, since SQLite's `sqrt` isn't available on every platform.
-- `measurements`: `id`, `job_id`, `session`, `dx`, `dy`, `dz` (decimal feet;
-  x east, y north, z up), `recorded_at`. Each Measure session starts from a
-  new origin, so a session's first point is not relative to the previous
-  session's last.
-- **Terms (the user's):** a *run* is one measurement, the segment from the
-  previous point, labelled "rN" in measured order. A *terminal* is any
-  endpoint of any run, labelled "tN": t1 is the start, so rN goes from tN
-  to tN+1. A new session's start is drawn at the previous end, so it is the
-  same terminal (no extra number).
+- `terminals`: `id`, `job_id`, `idx` (zero-based within the job, in
+  creation order), `start` (the `idx` measured from; null only for idx 0),
+  `x`, `y`, `z` (decimal feet from the origin: east, north, up; cumulative,
+  not displacements), `recorded_at`. UNIQUE (job_id, idx); CHECKs that only
+  idx 0 has a null start and that start < idx. **No lengths are stored**
+  (the user's rule): run lengths and totals are computed from coordinates
+  when shown. `insertJob` also creates t0 at (0, 0, 0) with the job's time;
+  it is a real row so it can later carry tags, a description or a label.
+- **Terms (the user's):** a *terminal* is a measured point, "tN" by its
+  index; t0 is the origin. Every other terminal ends a *run* from its start
+  terminal, named after the terminal it ends at ("r5" goes t2 → t5 if t5's
+  start is 2). Measuring from an earlier terminal makes a branch.
 - **Schema policy before first release:** edit the version-1 statements in
   place, keep `DB_VERSION = 1`, and tell the user to reinstall.
 
@@ -124,17 +130,25 @@ keep it in sync.
   the description (no label of its own; "Add a description", muted, when
   blank). Tapping the name or the description opens the Edit Job dialog,
   focused on that field. Delete confirms.
-- **Measure button**: first tap starts the tracker (origin); each tap records
-  the displacement since the previous point; a long press (600 ms) ends.
-  Pointer events, not click, so a long press isn't also a tap. Backgrounding
-  the app ends measuring. A live line shows distance since the last point and
-  the tracker's `detail`, coloured by quality (`data-quality`): `good`,
-  `limited` (recorded with a warning in the hint) or `lost` (tap refused,
-  "Can't record yet"). The sensor tracker reports still as good, moving as
-  limited.
+- **Measuring** (no Measure button, no long press): tapping a terminal in
+  the drawing starts the camera and a tracker session at once; the phone is
+  assumed to be at that terminal (`sessionStart`), and tracker positions
+  (metres from the session start) become job coordinates via `toJob`.
+  Taps on terminals are ignored while measuring. The footer then shows
+  **Add terminal** (green; records a terminal at the phone's position with
+  `start` = the run's start terminal, then keeps measuring from the new
+  one), **Finish run** (blue, below; records, then ends the session) and a
+  Cancel text button (ends without recording; earlier terminals stay).
+  `recording` guards double taps. The hint reads "Measuring from tN"; when
+  idle it tells the user to stand at a terminal and tap it. Backgrounding
+  the app ends measuring. A live line shows the distance from the run's
+  start terminal and the tracker's `detail`, coloured by quality
+  (`data-quality`): `good`, `limited` (recorded with a warning in the hint)
+  or `lost` (refused, "Can't record yet"). The sensor tracker reports still
+  as good, moving as limited.
 - **AR tracking, iOS (ARKit)**: `.gravityAndHeading`, so ARKit's +x/−z/+y are
-  east/north/up (converted natively). A new session per Measure start; its
-  world origin is the phone's position then, so `lastPoint` starts at zero.
+  east/north/up (converted natively). A new session per measuring start;
+  its world origin is the phone's position then, i.e. the tapped terminal.
   The camera is an `ARSCNView` added to the web view (Capacitor's root view),
   so it sits above the page and doesn't scroll; it covers `#camera`, a 40%
   slot between the job screen's bar and its scrolling body, shown only while
@@ -145,7 +159,7 @@ keep it in sync.
   added to the web view's parent and positioned with `setX`/`setY` in
   physical px (CSS px × density); the plugin draws the camera texture
   itself (external OES texture, `transformCoordinates2d` to crop). Session
-  per Measure start; the first tracking pose is the origin. ARCore has y up
+  per measuring start; the first tracking pose is the origin. ARCore has y up
   but arbitrary heading, so north comes from `TYPE_ROTATION_VECTOR`: while
   the camera's view direction is ≥ 0.3 horizontal, (compass heading −
   ARCore heading) of that direction is averaged over 45 samples, then
@@ -157,15 +171,15 @@ keep it in sync.
   corrected for declination.
 - **Drawing** (there is no table): square SVG plan view between the job
   info and the run detail panel, north up until rotated, X/Y only (Z isn't
-  drawn). Auto-fits all points (never tighter than 10 ft across) with a
-  round-number grid named in the caption. Runs are lines labelled "rN" at
-  their midpoints; terminals are small dots labelled "tN" up and to the
-  right. Both labels share one style (`.label`, with a card-coloured halo
+  drawn); always shown, since every job has t0. Auto-fits all terminals
+  (never tighter than 10 ft across) with a round-number grid named in the
+  caption. Runs are lines from start to end terminal labelled "rN" at their
+  midpoints; terminals are dots labelled "tN" up and to the right; the
+  run's start terminal is green while measuring. Both labels share one style (`.label`, with a card-coloured halo
   that must stay `vector-effect: non-scaling-stroke`, or it is drawn in feet
-  and becomes a large blob). Sessions are chained: each starts where the
-  last ended, since their true offset is unknown. While measuring, a dashed green segment runs from
-  the last point to the tracker's current position, redrawn at most once
-  per animation frame. Two-finger pinch pans, zooms and rotates
+  and becomes a large blob). While measuring, a dashed green segment runs
+  from the run's start terminal to the tracker's current position, redrawn
+  at most once per animation frame. Two-finger pinch pans, zooms and rotates
   (`enablePinch`, touch events; the `View` is centre + span + angle, drawn
   as a rotated group in a zero-centred viewBox, with labels counter-rotated
   and a north arrow top left; `touch-action: pan-y` leaves one finger to
@@ -177,10 +191,12 @@ keep it in sync.
   including the live line and grid caption, uses `feetInches` (12′ 4¼″).
 - **Job header** shows the total 3D length of all runs, in the run-length
   style, with "Total of N runs" under it.
-- **Run detail**: tapping the drawing selects the nearest run within 24 px
-  (`runAt`, geometric, not SVG hit-testing), highlighted in accent along
-  with its two terminals' labels; tapping away clears it. The panel's
-  heading is "r3 · t3 → t4". Recording a point selects the new run. The panel shows
+- **Taps on the drawing** (`hitTest`, geometric, not SVG hit-testing): the
+  nearest terminal within 30 px wins (and starts measuring); otherwise the
+  nearest run within 24 px is selected, highlighted in accent with its two
+  terminals' labels; tapping empty space clears it.
+- **Run detail**: heading "r5 · t2 → t5". Recording a terminal selects its
+  run. The panel shows
   the run's 3D length in feet and inches to the nearest ¼″, then level
   length and rise/fall when it rises or falls ¼″ or more, and a
   surveyor's bearing (N 45° E).

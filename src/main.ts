@@ -1,12 +1,21 @@
 import './style.css';
 import { App } from '@capacitor/app';
 import { Geolocation } from '@capacitor/geolocation';
-import { getStore, type Fix, type Job, type JobDetails, type JobsStore, type Measurement } from './db';
-import { createTracker, type Tracker, type TrackerStatus, type Vec3 } from './tracker';
-import { drawJob, enablePinch, runAt, type LiveSegment, type View } from './drawing';
+import {
+  getStore,
+  runLength,
+  totalLength,
+  type Fix,
+  type Job,
+  type JobDetails,
+  type JobsStore,
+  type Point,
+  type Terminal,
+} from './db';
+import { createTracker, type Tracker, type TrackerStatus } from './tracker';
+import { drawJob, enablePinch, hitTest, type LiveRun, type View } from './drawing';
 
 const FEET_PER_METRE = 1 / 0.3048;
-const LONG_PRESS_MS = 600;
 const GPS_TIMEOUT_MS = 15000;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -72,8 +81,12 @@ app.innerHTML = `
     </div>
     <footer class="measure-bar">
       <p id="live" class="live" hidden></p>
-      <button id="measure" type="button" class="measure-btn">Measure</button>
-      <p id="measure-hint" class="hint">Tap to set the starting point</p>
+      <div id="measure-actions" class="measure-actions" hidden>
+        <button id="add-terminal" type="button" class="measure-btn">Add terminal</button>
+        <button id="finish-run" type="button" class="measure-btn finish">Finish run</button>
+        <button id="cancel-measuring" type="button" class="text-btn">Cancel</button>
+      </div>
+      <p id="measure-hint" class="hint"></p>
     </footer>
   </dialog>
 `;
@@ -107,13 +120,17 @@ const runNameEl = document.querySelector<HTMLHeadingElement>('#run-name')!;
 const runLengthEl = document.querySelector<HTMLParagraphElement>('#run-length')!;
 const runExtraEl = document.querySelector<HTMLParagraphElement>('#run-extra')!;
 const liveEl = document.querySelector<HTMLParagraphElement>('#live')!;
-const measureBtn = document.querySelector<HTMLButtonElement>('#measure')!;
+const measureActionsEl = document.querySelector<HTMLDivElement>('#measure-actions')!;
+const addTerminalBtn = document.querySelector<HTMLButtonElement>('#add-terminal')!;
+const finishRunBtn = document.querySelector<HTMLButtonElement>('#finish-run')!;
+const cancelMeasuringBtn = document.querySelector<HTMLButtonElement>('#cancel-measuring')!;
 const hintEl = document.querySelector<HTMLParagraphElement>('#measure-hint')!;
 
 let store: JobsStore;
 let jobs: Job[] = [];
 let current: Job | null = null;
-let measurements: Measurement[] = [];
+/** The open job's terminals, by index. */
+let terminals: Terminal[] = [];
 
 // ---------- Formatting ----------
 
@@ -132,8 +149,6 @@ function formatPlace(j: Job): string {
   const acc = j.accuracy != null ? ` ±${Math.round(j.accuracy)} m` : '';
   return `${lat}, ${lng}${acc}`;
 }
-
-const distance = (d: { dx: number; dy: number; dz: number }) => Math.hypot(d.dx, d.dy, d.dz);
 
 const FRACTIONS = ['', '¼', '½', '¾'];
 
@@ -420,54 +435,53 @@ function renderJob() {
   descriptionBtn.classList.toggle('placeholder', !current.description);
 }
 
-// The run shown in the detail panel (an index into measurements), or null.
+// The run shown in the detail panel, by the index of the terminal it ends
+// at; null for none.
 let selectedRun: number | null = null;
 
 function renderRunDetail() {
-  const m = selectedRun != null ? measurements[selectedRun] : undefined;
-  runEmptyEl.hidden = !!m;
-  runInfoEl.hidden = !m;
-  if (!m) return;
-  const n = selectedRun! + 1;
-  runNameEl.textContent = `r${n} · t${n} → t${n + 1}`;
-  runLengthEl.textContent = feetInches(distance(m));
-  const level = Math.hypot(m.dx, m.dy);
+  const end = selectedRun != null ? terminals[selectedRun] : undefined;
+  const start = end?.start != null ? terminals[end.start] : undefined;
+  runEmptyEl.hidden = !!start;
+  runInfoEl.hidden = !start;
+  if (!end || !start) return;
+  runNameEl.textContent = `r${end.index} · t${start.index} → t${end.index}`;
+  runLengthEl.textContent = feetInches(runLength(start, end));
+  const [dx, dy, dz] = [end.x - start.x, end.y - start.y, end.z - start.z];
+  const level = Math.hypot(dx, dy);
   const extra: string[] = [];
-  if (Math.abs(m.dz) >= 1 / 48) {
-    extra.push(`level ${feetInches(level)}`, `${m.dz > 0 ? 'rises' : 'falls'} ${feetInches(m.dz)}`);
+  if (Math.abs(dz) >= 1 / 48) {
+    extra.push(`level ${feetInches(level)}`, `${dz > 0 ? 'rises' : 'falls'} ${feetInches(dz)}`);
   }
-  if (level >= 0.05) extra.push(bearing(m.dx, m.dy));
+  if (level >= 0.05) extra.push(bearing(dx, dy));
   runExtraEl.textContent = extra.join(' · ');
 }
 
 function renderTotal() {
-  const total = measurements.reduce((sum, m) => sum + distance(m), 0);
-  totalEl.textContent = feetInches(total);
-  const n = measurements.length;
+  totalEl.textContent = feetInches(totalLength(terminals));
+  const n = terminals.length - 1;
   totalLabelEl.textContent = n === 0 ? 'No runs yet' : n === 1 ? 'Total of 1 run' : `Total of ${n} runs`;
 }
 
-function renderMeasurements() {
+function renderTerminals() {
   renderTotal();
   renderRunDetail();
   redraw();
 }
 
-// The segment from the last point to where the phone is now; null when not
-// measuring. Updated on every motion sample, drawn at most once per frame.
-let live: LiveSegment | null = null;
+// The run from its start terminal to where the phone is now; null when not
+// measuring. Updated on every tracker sample, drawn at most once per frame.
+let live: LiveRun | null = null;
 let redrawQueued = false;
-// Set by pinching; null means fit all the points (until Fit is tapped).
+// Set by pinching; null means fit all the terminals (until Fit is tapped).
 let pinchedView: View | null = null;
 let shownView: View | null = null;
 
 function redraw() {
-  const drawn = drawJob(drawingEl, measurements, live, pinchedView, selectedRun);
-  shownView = drawn?.view ?? null;
-  fitBtn.hidden = !pinchedView || !drawn;
-  drawingCaptionEl.textContent = drawn == null
-    ? 'The drawing appears when you start measuring.'
-    : `Seen from above. Grid ${feetInches(drawn.step)}.`;
+  const drawn = drawJob(drawingEl, terminals, live, pinchedView, selectedRun);
+  shownView = drawn.view;
+  fitBtn.hidden = !pinchedView;
+  drawingCaptionEl.textContent = `Seen from above. Grid ${feetInches(drawn.step)}.`;
 }
 
 enablePinch(drawingEl, () => shownView, (v) => {
@@ -475,11 +489,18 @@ enablePinch(drawingEl, () => shownView, (v) => {
   queueRedraw();
 });
 
-// Tap a run to show it in the detail panel; tap elsewhere to clear.
+// Tap a terminal to measure from it, or a run to show it in the detail
+// panel; tap elsewhere to clear. Terminals are ignored while measuring.
 drawingEl.addEventListener('click', (e) => {
   if (!shownView) return;
-  selectedRun = runAt(drawingEl, measurements, shownView, e.clientX, e.clientY);
-  renderMeasurements();
+  const hit = hitTest(drawingEl, terminals, shownView, e.clientX, e.clientY);
+  if (hit?.kind === 'terminal') {
+    if (!measuring) void startMeasuring(hit.index);
+    return;
+  }
+  selectedRun = hit?.index ?? null;
+  renderRunDetail();
+  redraw();
 });
 
 fitBtn.addEventListener('click', () => {
@@ -498,13 +519,13 @@ function queueRedraw() {
 
 async function openJob(job: Job) {
   current = job;
-  measurements = await store.getMeasurements(job.id);
+  terminals = await store.getTerminals(job.id);
   pinchedView = null;
   selectedRun = null;
   // Details start collapsed each time a job is opened.
   detailsEl.open = false;
   renderJob();
-  renderMeasurements();
+  renderTerminals();
   showMeasureIdle();
   jobEl.querySelector('.screen-body')!.scrollTop = 0;
   jobEl.showModal();
@@ -560,25 +581,35 @@ deleteBtn.addEventListener('click', async () => {
 
 // ---------- Measuring ----------
 //
-// Tap Measure to start: tracking starts and the phone's position becomes the
-// origin. Each later tap records the displacement since the previous point.
-// A long press ends measuring.
+// Tapping a terminal starts a tracking session there: the phone is assumed
+// to be at that terminal. Add terminal records a terminal where the phone is
+// now, ending a run from the previous one, and keeps measuring from it.
+// Finish run does the same and ends the session; Cancel ends it without
+// recording.
 
 let tracker: Tracker | null = null;
 let measuring = false;
-let session = 0;
-let lastPoint: Vec3 = { x: 0, y: 0, z: 0 };
-let pressTimer: number | undefined;
+/** The terminal the session started at; tracker positions are relative to it. */
+let sessionStart: Point = { x: 0, y: 0, z: 0 };
+/** The index of the terminal the current run starts at. */
+let runFrom = 0;
+// Set while a terminal is being saved, so a double tap records it once.
+let recording = false;
 let hintTimer: number | undefined;
 
-const MEASURING_HINT = 'Tap to record · hold to finish';
+function idleHint(): string {
+  return terminals.length === 1
+    ? 'Stand at t0 and tap it in the drawing to start measuring.'
+    : 'Stand at a terminal and tap it in the drawing to measure from it.';
+}
+
+const measuringHint = () => `Measuring from t${runFrom}`;
 
 function showMeasureIdle() {
-  measureBtn.textContent = 'Measure';
-  measureBtn.classList.remove('measuring');
-  clearTimeout(hintTimer);
-  hintEl.textContent = 'Tap to set the starting point';
+  measureActionsEl.hidden = true;
   liveEl.hidden = true;
+  clearTimeout(hintTimer);
+  hintEl.textContent = idleHint();
 }
 
 /** Shows `text` in place of the hint for a couple of seconds. */
@@ -586,24 +617,29 @@ function flashHint(text: string) {
   clearTimeout(hintTimer);
   hintEl.textContent = text;
   hintTimer = window.setTimeout(() => {
-    if (measuring) hintEl.textContent = MEASURING_HINT;
+    hintEl.textContent = measuring ? measuringHint() : idleHint();
   }, 2500);
+}
+
+/** Where a tracker position (metres from the session start) is, in feet from the origin. */
+function toJob(position: { x: number; y: number; z: number }): Point {
+  return {
+    x: sessionStart.x + position.x * FEET_PER_METRE,
+    y: sessionStart.y + position.y * FEET_PER_METRE,
+    z: sessionStart.z + position.z * FEET_PER_METRE,
+  };
 }
 
 function showLive(s: TrackerStatus) {
   if (!measuring) return;
-  const d = {
-    dx: (s.position.x - lastPoint.x) * FEET_PER_METRE,
-    dy: (s.position.y - lastPoint.y) * FEET_PER_METRE,
-    dz: (s.position.z - lastPoint.z) * FEET_PER_METRE,
-  };
-  liveEl.textContent = `${feetInches(distance(d))}  ·  ${s.detail}`;
+  const to = toJob(s.position);
+  liveEl.textContent = `${feetInches(runLength(terminals[runFrom], to))}  ·  ${s.detail}`;
   liveEl.dataset.quality = s.quality;
-  live = { d, newSession: !measurements.some((m) => m.session === session) };
+  live = { from: runFrom, to };
   queueRedraw();
 }
 
-async function startMeasuring() {
+async function startMeasuring(from: number) {
   if (!current || measuring) return;
   tracker ??= await createTracker(cameraEl);
   tracker.onUpdate = showLive;
@@ -612,13 +648,12 @@ async function startMeasuring() {
     alert(`Measuring stopped: ${message}`);
   };
   measuring = true;
-  session = measurements.reduce((max, m) => Math.max(max, m.session), 0) + 1;
-  lastPoint = { x: 0, y: 0, z: 0 };
-  live = { d: { dx: 0, dy: 0, dz: 0 }, newSession: true };
+  runFrom = from;
+  sessionStart = { x: terminals[from].x, y: terminals[from].y, z: terminals[from].z };
+  live = { from, to: sessionStart };
   redraw();
-  measureBtn.textContent = 'Record point';
-  measureBtn.classList.add('measuring');
-  hintEl.textContent = MEASURING_HINT;
+  measureActionsEl.hidden = false;
+  hintEl.textContent = measuringHint();
   liveEl.textContent = `Starting ${tracker.startingLabel}…`;
   delete liveEl.dataset.quality;
   liveEl.hidden = false;
@@ -642,58 +677,46 @@ async function stopMeasuring() {
   await tracker?.stop();
 }
 
-async function recordPoint() {
-  if (!current || !tracker) return;
-  const s = await tracker.status();
-  if (!s || s.quality === 'lost') {
-    flashHint(`Can’t record yet: ${s?.detail ?? 'starting'}`);
-    return;
+/** Records a terminal where the phone is now; then keeps measuring unless `finish`. */
+async function recordTerminal(finish: boolean) {
+  if (!current || !tracker || !measuring || recording) return;
+  recording = true;
+  try {
+    const s = await tracker.status();
+    if (!s || s.quality === 'lost') {
+      flashHint(`Can’t record yet: ${s?.detail ?? 'starting'}`);
+      return;
+    }
+    const t = await store.insertTerminal({
+      jobId: current.id,
+      index: terminals.length,
+      start: runFrom,
+      ...toJob(s.position),
+      recordedAt: Date.now(),
+    });
+    terminals.push(t);
+    // Show the new run's length; the next run starts here.
+    selectedRun = t.index;
+    runFrom = t.index;
+    live = { from: runFrom, to: t };
+    renderTerminals();
+    if (finish) {
+      await stopMeasuring();
+    } else {
+      hintEl.textContent = measuringHint();
+      addTerminalBtn.classList.remove('flash');
+      void addTerminalBtn.offsetWidth;
+      addTerminalBtn.classList.add('flash');
+    }
+    if (s.quality === 'limited') flashHint(`Recorded t${t.index}, but ${s.detail.toLowerCase()}`);
+  } finally {
+    recording = false;
   }
-  const p = s.position;
-  const m = await store.insertMeasurement({
-    jobId: current.id,
-    session,
-    dx: (p.x - lastPoint.x) * FEET_PER_METRE,
-    dy: (p.y - lastPoint.y) * FEET_PER_METRE,
-    dz: (p.z - lastPoint.z) * FEET_PER_METRE,
-    recordedAt: Date.now(),
-  });
-  lastPoint = p;
-  measurements.push(m);
-  live = { d: { dx: 0, dy: 0, dz: 0 }, newSession: false };
-  // Show the new run's length.
-  selectedRun = measurements.length - 1;
-  renderMeasurements();
-  measureBtn.classList.remove('flash');
-  void measureBtn.offsetWidth;
-  measureBtn.classList.add('flash');
-  if (s.quality === 'limited') flashHint(`Recorded, but ${s.detail.toLowerCase()}`);
 }
 
-// Taps and long presses come from pointer events rather than click, so a
-// long press can end measuring without also counting as a tap.
-measureBtn.addEventListener('pointerdown', (e) => {
-  measureBtn.setPointerCapture(e.pointerId);
-  pressTimer = window.setTimeout(() => {
-    pressTimer = undefined;
-    void stopMeasuring();
-  }, LONG_PRESS_MS);
-});
-
-measureBtn.addEventListener('pointerup', () => {
-  if (pressTimer === undefined) return; // Long press already handled.
-  clearTimeout(pressTimer);
-  pressTimer = undefined;
-  if (measuring) void recordPoint();
-  else void startMeasuring();
-});
-
-measureBtn.addEventListener('pointercancel', () => {
-  clearTimeout(pressTimer);
-  pressTimer = undefined;
-});
-
-measureBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+addTerminalBtn.addEventListener('click', () => void recordTerminal(false));
+finishRunBtn.addEventListener('click', () => void recordTerminal(true));
+cancelMeasuringBtn.addEventListener('click', () => void stopMeasuring());
 
 // Stop tracking when the app is backgrounded; no tracker can follow the
 // phone while it's suspended. Android's web view doesn't reliably report

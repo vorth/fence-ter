@@ -525,6 +525,11 @@ main.card {
   stroke-linecap: round;
 }
 
+/* The terminal the current run starts at. */
+.drawing .terminal.measuring-from {
+  fill: var(--measuring);
+}
+
 .drawing .live-point {
   fill: var(--measuring);
   opacity: 0.8;
@@ -613,18 +618,25 @@ main.card {
   background: #000;
 }
 
-/* The big Measure button. No text selection or callout, so a long press ends
-   measuring instead of selecting the label. */
-.measure-btn {
+/* Add terminal, Finish run (below it) and Cancel, shown while measuring. */
+.measure-actions {
   width: 100%;
   max-width: 24rem;
-  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.measure-btn {
+  width: 100%;
+  padding: 1.1rem;
   border: none;
   border-radius: 1rem;
-  font-size: 1.5rem;
+  font-size: 1.3rem;
   font-weight: 700;
   color: #fff;
-  background: var(--accent);
+  background: var(--measuring);
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -632,18 +644,18 @@ main.card {
 }
 
 .measure-btn:active {
-  background: var(--accent-press);
-}
-
-.measure-btn.measuring {
-  background: var(--measuring);
-}
-
-.measure-btn.measuring:active {
   background: var(--measuring-press);
 }
 
-/* Brief confirmation that a point was recorded. */
+.measure-btn.finish {
+  background: var(--accent);
+}
+
+.measure-btn.finish:active {
+  background: var(--accent-press);
+}
+
+/* Brief confirmation that a terminal was recorded. */
 .measure-btn.flash {
   animation: flash 0.4s ease-out;
 }

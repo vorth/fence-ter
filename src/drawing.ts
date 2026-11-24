@@ -1,45 +1,23 @@
-// Plan view of a job, seen from above, scaled to fit. Each measurement is a
-// *run*: a straight segment from the previous point, labelled "r1", "r2"...
-// in the order measured. Every endpoint of a run is a *terminal*, labelled
-// "t1" (the start), "t2"..., so run rN goes from tN to tN+1. Points are
-// running sums. A new session's origin isn't related to the previous
-// session's end, so the drawing simply continues from there (the same
-// terminal).
+// Plan view of a job, seen from above, scaled to fit. A *terminal* is a
+// measured point, labelled "t0" (the job's origin), "t1"... in the order
+// created. Every terminal but t0 ends a *run* from its start terminal; the
+// run is labelled after the terminal it ends at ("r5" ends at t5). Runs
+// branch wherever measuring starts from an earlier terminal.
 
-import type { Displacement, Measurement } from './db';
+import type { Point, Terminal } from './db';
 
-/** The in-progress segment while measuring. */
-export interface LiveSegment {
-  /** Feet from the last recorded point (or the session's origin). */
-  d: Displacement;
-  /** True until the session's first point is recorded. */
-  newSession: boolean;
+/** The in-progress run while measuring. */
+export interface LiveRun {
+  /** Index of the terminal the run starts at. */
+  from: number;
+  /** Where the phone is now, in feet from the origin. */
+  to: Point;
 }
 
 type Pt = [number, number];
 
-interface Layout {
-  /** Run i goes from terminals[i] to terminals[i + 1]. */
-  runs: [Pt, Pt][];
-  /** Terminal i is labelled t(i + 1). */
-  terminals: Pt[];
-  /** Where the next point is measured from. */
-  end: Pt;
-}
-
-/** Positions in SVG coordinates: x east, y south (so north is up), in feet. */
-function layout(measurements: Measurement[]): Layout {
-  let at: Pt = [0, 0];
-  const runs: [Pt, Pt][] = [];
-  const terminals: Pt[] = [at];
-  for (const m of measurements) {
-    const next: Pt = [at[0] + m.dx, at[1] - m.dy];
-    runs.push([at, next]);
-    terminals.push(next);
-    at = next;
-  }
-  return { runs, terminals, end: at };
-}
+/** A position in SVG coordinates: x east, y south (so north is up), in feet. */
+const plan = (p: Point): Pt => [p.x, -p.y];
 
 // Never zoom in closer than this, so the first few inches of sensor noise
 // don't fill the screen.
@@ -74,27 +52,22 @@ function el(name: string, attrs: Record<string, string | number>): SVGElement {
 
 /**
  * Draws the job into `svg`, showing `view` or, when null, a view fitted to
- * all the points, with run `selected` (an index) highlighted. Returns the view
- * used and the grid spacing in feet, or null when there is nothing to draw.
+ * all the terminals. `selected` is the run highlighted (by the index of the
+ * terminal it ends at). Returns the view used and the grid spacing in feet.
  */
 export function drawJob(
   svg: SVGSVGElement,
-  measurements: Measurement[],
-  live: LiveSegment | null,
+  terminals: Terminal[],
+  live: LiveRun | null,
   view: View | null,
   selected: number | null,
-): { view: View; step: number } | null {
-  if (measurements.length === 0 && !live) {
-    svg.replaceChildren();
-    return null;
-  }
-
-  const { runs, terminals, end } = layout(measurements);
-  const tip: Pt | null = live ? [end[0] + live.d.dx, end[1] - live.d.dy] : null;
+): { view: View; step: number } {
+  const at = terminals.map(plan);
+  const tip: Pt | null = live ? plan(live.to) : null;
 
   if (!view) {
     // Fit everything, north up, square, with a margin.
-    const all = [end, ...runs.map((r) => r[0]), ...(tip ? [tip] : [])];
+    const all = [...at, ...(tip ? [tip] : [])];
     const xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
     const [minX, maxX, minY, maxY] =
       [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
@@ -111,7 +84,7 @@ export function drawJob(
   svg.setAttribute('viewBox', `${-span / 2} ${-span / 2} ${span} ${span}`);
   const world = el('g', { transform: `rotate(${deg}) translate(${-cx} ${-cy})` });
 
-  const r = span * 0.012;
+  const r = span * 0.014;
   const font = span * 0.038;
   const children: SVGElement[] = [];
 
@@ -135,29 +108,38 @@ export function drawJob(
     children.push(el('line', { class: 'grid', x1: cx - reach, y1: gy, x2: cx + reach, y2: gy }));
   }
 
-  runs.forEach(([p, q], i) => {
+  const runs = terminals.filter((t) => t.start != null);
+  for (const t of runs) {
+    const [p, q] = [at[t.start!], at[t.index]];
     children.push(el('line', {
-      class: i === selected ? 'run selected' : 'run', x1: p[0], y1: p[1], x2: q[0], y2: q[1],
+      class: t.index === selected ? 'run selected' : 'run', x1: p[0], y1: p[1], x2: q[0], y2: q[1],
     }));
-  });
-  if (tip) {
-    children.push(el('line', { class: 'live-path', x1: end[0], y1: end[1], x2: tip[0], y2: tip[1] }));
+  }
+  if (live && tip) {
+    const p = at[live.from];
+    children.push(el('line', { class: 'live-path', x1: p[0], y1: p[1], x2: tip[0], y2: tip[1] }));
   }
 
-  for (const [x, y] of terminals) children.push(el('circle', { class: 'terminal', cx: x, cy: y, r }));
-  if (tip) children.push(el('circle', { class: 'live-point', cx: tip[0], cy: tip[1], r: r * 1.6 }));
+  at.forEach(([x, y], i) => {
+    children.push(el('circle', {
+      class: i === live?.from ? 'terminal measuring-from' : 'terminal', cx: x, cy: y, r,
+    }));
+  });
+  if (tip) children.push(el('circle', { class: 'live-point', cx: tip[0], cy: tip[1], r: r * 1.4 }));
 
   // Run labels at their midpoints, haloed so they read over the line.
-  runs.forEach(([p, q], i) => {
-    children.push(text(i === selected ? 'label selected' : 'label',
-      (p[0] + q[0]) / 2, (p[1] + q[1]) / 2, `r${i + 1}`,
+  for (const t of runs) {
+    const [p, q] = [at[t.start!], at[t.index]];
+    children.push(text(t.index === selected ? 'label selected' : 'label',
+      (p[0] + q[0]) / 2, (p[1] + q[1]) / 2, `r${t.index}`,
       { 'text-anchor': 'middle', 'dominant-baseline': 'central' }));
-  });
+  }
   // Terminal labels up and to the right of their dots on screen.
   const [ox, oy] = unrotate(r * 1.5, -r * 1.5, angle);
-  const ends = selected != null ? [selected, selected + 1] : [];
-  terminals.forEach(([x, y], i) => {
-    children.push(text(ends.includes(i) ? 'label selected' : 'label', x + ox, y + oy, `t${i + 1}`));
+  const selectedRun = selected != null ? terminals[selected] : undefined;
+  const ends = selectedRun ? [selectedRun.start, selectedRun.index] : [];
+  at.forEach(([x, y], i) => {
+    children.push(text(ends.includes(i) ? 'label selected' : 'label', x + ox, y + oy, `t${i}`));
   });
   world.replaceChildren(...children);
 
@@ -181,20 +163,25 @@ export function drawJob(
   return { view, step };
 }
 
-// How close a tap must be to a run to select it, in screen pixels.
-const TAP_SLOP_PX = 24;
+// How close a tap must be to a terminal or run to hit it, in screen pixels.
+// Terminals win over runs, since every terminal sits on runs.
+const TERMINAL_SLOP_PX = 30;
+const RUN_SLOP_PX = 24;
+
+export type Hit = { kind: 'terminal' | 'run'; index: number };
 
 /**
- * The index of the run nearest a tap at (clientX, clientY), or null if none
- * is within TAP_SLOP_PX. `view` is the view on screen.
+ * What a tap at (clientX, clientY) hits: the nearest terminal within
+ * TERMINAL_SLOP_PX, else the nearest run within RUN_SLOP_PX (by the index of
+ * the terminal it ends at), else null. `view` is the view on screen.
  */
-export function runAt(
+export function hitTest(
   svg: SVGSVGElement,
-  measurements: Measurement[],
+  terminals: Terminal[],
   view: View,
   clientX: number,
   clientY: number,
-): number | null {
+): Hit | null {
   const rect = svg.getBoundingClientRect();
   const feetPerPx = view.span / rect.width;
   const [sx, sy] = [
@@ -203,15 +190,28 @@ export function runAt(
   ];
   const [dx, dy] = unrotate(sx, sy, view.angle);
   const w: Pt = [view.cx + dx, view.cy + dy];
-  let best: number | null = null;
-  let bestDist = TAP_SLOP_PX * feetPerPx;
-  layout(measurements).runs.forEach(([p, q], i) => {
-    const d = distanceToSegment(w, p, q);
+  const at = terminals.map(plan);
+
+  let best: Hit | null = null;
+  let bestDist = TERMINAL_SLOP_PX * feetPerPx;
+  at.forEach((p, i) => {
+    const d = Math.hypot(w[0] - p[0], w[1] - p[1]);
     if (d <= bestDist) {
-      best = i;
+      best = { kind: 'terminal', index: i };
       bestDist = d;
     }
   });
+  if (best) return best;
+
+  bestDist = RUN_SLOP_PX * feetPerPx;
+  for (const t of terminals) {
+    if (t.start == null) continue;
+    const d = distanceToSegment(w, at[t.start], at[t.index]);
+    if (d <= bestDist) {
+      best = { kind: 'run', index: t.index };
+      bestDist = d;
+    }
+  }
   return best;
 }
 

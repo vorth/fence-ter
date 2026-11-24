@@ -21,7 +21,7 @@ export interface Job {
   accuracy: number | null;
   /** Metres; null when the device does not report altitude. */
   altitude: number | null;
-  /** Sum of the lengths of all its runs (measurements), in decimal feet. */
+  /** Sum of the lengths of all its runs, in decimal feet; computed, not stored. */
   totalLength: number;
 }
 
@@ -31,25 +31,37 @@ export type JobDetails = Pick<Job, 'title' | 'description'>;
 /** Where a job was created: a GPS fix, as captured. */
 export type Fix = Pick<Job, 'latitude' | 'longitude' | 'accuracy' | 'altitude'>;
 
-/** Displacement in decimal feet: x east, y north, z up. */
-export interface Displacement {
-  dx: number;
-  dy: number;
-  dz: number;
+/** A position in decimal feet relative to the job's origin: x east, y north, z up. */
+export interface Point {
+  x: number;
+  y: number;
+  z: number;
 }
 
-/** One measured point, relative to the point before it in the same session. */
-export interface Measurement extends Displacement {
+/**
+ * A measured point of a job. Terminal 0 is the job's origin, created with the
+ * job, always at (0, 0, 0). Every other terminal ends a *run* from its
+ * `start` terminal. Only coordinates are stored; run lengths are computed
+ * from them when shown.
+ */
+export interface Terminal extends Point {
   id: number;
   jobId: number;
-  /**
-   * Measuring sessions within the job, from 1. Each session starts at its own
-   * origin, so the first measurement of a session is not relative to the last
-   * one of the previous session.
-   */
-  session: number;
+  /** Zero-based position in the job, in the order created; t0 is the origin. */
+  index: number;
+  /** Index of the terminal this one was measured from; null for the origin. */
+  start: number | null;
   /** Epoch milliseconds. */
   recordedAt: number;
+}
+
+/** The length of the run from `a` to `b`, in decimal feet. */
+export const runLength = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+
+/** The sum of the job's run lengths, in decimal feet. `terminals` are indexed by `index`. */
+export function totalLength(terminals: Terminal[]): number {
+  return terminals.reduce(
+    (sum, t) => (t.start == null ? sum : sum + runLength(terminals[t.start], t)), 0);
 }
 
 /** The persistence surface the app depends on. Backed by SQLite natively, stubbed on web. */
@@ -57,13 +69,14 @@ export interface JobsStore {
   init(): Promise<void>;
   /** All jobs, newest first. */
   getJobs(): Promise<Job[]>;
+  /** Creates the job and its origin terminal, t0. */
   insertJob(createdAt: number, fix: Fix | null, details: JobDetails): Promise<Job>;
   setDetails(id: number, details: JobDetails): Promise<void>;
-  /** Deletes the job and its measurements. */
+  /** Deletes the job and its terminals. */
   deleteJob(id: number): Promise<void>;
-  /** The job's measurements, in the order recorded. */
-  getMeasurements(jobId: number): Promise<Measurement[]>;
-  insertMeasurement(m: Omit<Measurement, 'id'>): Promise<Measurement>;
+  /** The job's terminals, by index (so `result[i].index === i`). */
+  getTerminals(jobId: number): Promise<Terminal[]>;
+  insertTerminal(t: Omit<Terminal, 'id'>): Promise<Terminal>;
 }
 
 const DB_NAME = 'jobs';
@@ -88,16 +101,22 @@ const UPGRADE_STATEMENTS = [
         altitude    REAL
       );`,
       `CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at);`,
-      `CREATE TABLE IF NOT EXISTS measurements (
+      // x, y, z: decimal feet from the job's origin (east, north, up).
+      // idx: zero-based within the job. start: idx of the terminal measured
+      // from, null for the origin (idx 0).
+      `CREATE TABLE IF NOT EXISTS terminals (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         job_id      INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-        session     INTEGER NOT NULL,
-        dx          REAL    NOT NULL,
-        dy          REAL    NOT NULL,
-        dz          REAL    NOT NULL,
-        recorded_at INTEGER NOT NULL
+        idx         INTEGER NOT NULL,
+        start       INTEGER,
+        x           REAL    NOT NULL,
+        y           REAL    NOT NULL,
+        z           REAL    NOT NULL,
+        recorded_at INTEGER NOT NULL,
+        UNIQUE (job_id, idx),
+        CHECK ((idx = 0) = (start IS NULL)),
+        CHECK (start IS NULL OR start < idx)
       );`,
-      `CREATE INDEX IF NOT EXISTS idx_measurements_job_id ON measurements(job_id);`,
     ],
   },
 ];
@@ -127,31 +146,37 @@ function rowToJob(r: JobRow, totalLength: number): Job {
   };
 }
 
-interface MeasurementRow {
+interface TerminalRow {
   id: number;
   job_id: number;
-  session: number;
-  dx: number;
-  dy: number;
-  dz: number;
+  idx: number;
+  start: number | null;
+  x: number;
+  y: number;
+  z: number;
   recorded_at: number;
 }
 
-function rowToMeasurement(r: MeasurementRow): Measurement {
+function rowToTerminal(r: TerminalRow): Terminal {
   return {
     id: r.id,
     jobId: r.job_id,
-    session: r.session,
-    dx: r.dx,
-    dy: r.dy,
-    dz: r.dz,
+    index: r.idx,
+    start: r.start,
+    x: r.x,
+    y: r.y,
+    z: r.z,
     recordedAt: r.recorded_at,
   };
 }
 
-const JOB_COLUMNS = 'id, title, description, created_at, latitude, longitude, accuracy, altitude';
+const TERMINAL_COLUMNS = 'id, job_id, idx, start, x, y, z, recorded_at';
 
-const runLength = (m: Displacement) => Math.hypot(m.dx, m.dy, m.dz);
+/** The origin terminal of a new job. */
+const origin = (jobId: number, createdAt: number): Omit<Terminal, 'id'> =>
+  ({ jobId, index: 0, start: null, x: 0, y: 0, z: 0, recordedAt: createdAt });
+
+const JOB_COLUMNS = 'id, title, description, created_at, latitude, longitude, accuracy, altitude';
 
 /** Real SQLite-backed store for native (iOS/Android) platforms. */
 class SqliteJobsStore implements JobsStore {
@@ -179,13 +204,19 @@ class SqliteJobsStore implements JobsStore {
     const res = await this.conn().query(
       `SELECT ${JOB_COLUMNS} FROM jobs ORDER BY created_at DESC;`,
     );
-    // Run lengths are summed here: SQLite's sqrt() isn't available everywhere.
-    const runs = await this.conn().query(`SELECT job_id, dx, dy, dz FROM measurements;`);
-    const totals = new Map<number, number>();
-    for (const m of (runs.values ?? []) as (Displacement & { job_id: number })[]) {
-      totals.set(m.job_id, (totals.get(m.job_id) ?? 0) + runLength(m));
+    // Totals are computed here, not in SQL: SQLite's sqrt() isn't available
+    // everywhere.
+    const all = await this.conn().query(
+      `SELECT ${TERMINAL_COLUMNS} FROM terminals ORDER BY job_id, idx;`,
+    );
+    const byJob = new Map<number, Terminal[]>();
+    for (const r of (all.values ?? []) as TerminalRow[]) {
+      const list = byJob.get(r.job_id) ?? [];
+      list.push(rowToTerminal(r));
+      byJob.set(r.job_id, list);
     }
-    return ((res.values ?? []) as JobRow[]).map((r) => rowToJob(r, totals.get(r.id) ?? 0));
+    return ((res.values ?? []) as JobRow[]).map(
+      (r) => rowToJob(r, totalLength(byJob.get(r.id) ?? [])));
   }
 
   async insertJob(createdAt: number, fix: Fix | null, details: JobDetails): Promise<Job> {
@@ -197,6 +228,7 @@ class SqliteJobsStore implements JobsStore {
     );
     const id = res.changes?.lastId;
     if (id == null) throw new Error('Insert did not return a job id.');
+    await this.insertTerminal(origin(id, createdAt));
     const rows = await this.conn().query(`SELECT ${JOB_COLUMNS} FROM jobs WHERE id = ?;`, [id]);
     return rowToJob((rows.values as JobRow[])[0], 0);
   }
@@ -211,28 +243,27 @@ class SqliteJobsStore implements JobsStore {
   async deleteJob(id: number): Promise<void> {
     // Explicit rather than relying on ON DELETE CASCADE, which needs
     // PRAGMA foreign_keys to be on for the connection.
-    await this.conn().run(`DELETE FROM measurements WHERE job_id = ?;`, [id]);
+    await this.conn().run(`DELETE FROM terminals WHERE job_id = ?;`, [id]);
     await this.conn().run(`DELETE FROM jobs WHERE id = ?;`, [id]);
   }
 
-  async getMeasurements(jobId: number): Promise<Measurement[]> {
+  async getTerminals(jobId: number): Promise<Terminal[]> {
     const res = await this.conn().query(
-      `SELECT id, job_id, session, dx, dy, dz, recorded_at
-         FROM measurements WHERE job_id = ? ORDER BY id;`,
+      `SELECT ${TERMINAL_COLUMNS} FROM terminals WHERE job_id = ? ORDER BY idx;`,
       [jobId],
     );
-    return ((res.values ?? []) as MeasurementRow[]).map(rowToMeasurement);
+    return ((res.values ?? []) as TerminalRow[]).map(rowToTerminal);
   }
 
-  async insertMeasurement(m: Omit<Measurement, 'id'>): Promise<Measurement> {
+  async insertTerminal(t: Omit<Terminal, 'id'>): Promise<Terminal> {
     const res = await this.conn().run(
-      `INSERT INTO measurements (job_id, session, dx, dy, dz, recorded_at)
-       VALUES (?, ?, ?, ?, ?, ?);`,
-      [m.jobId, m.session, m.dx, m.dy, m.dz, m.recordedAt],
+      `INSERT INTO terminals (job_id, idx, start, x, y, z, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?);`,
+      [t.jobId, t.index, t.start, t.x, t.y, t.z, t.recordedAt],
     );
     const id = res.changes?.lastId;
-    if (id == null) throw new Error('Insert did not return a measurement id.');
-    return { id, ...m };
+    if (id == null) throw new Error('Insert did not return a terminal id.');
+    return { id, ...t };
   }
 }
 
@@ -242,9 +273,9 @@ class SqliteJobsStore implements JobsStore {
  */
 class WebStubJobsStore implements JobsStore {
   private jobs: Omit<Job, 'totalLength'>[] = [];
-  private measurements: Measurement[] = [];
+  private terminals: Terminal[] = [];
   private nextJobId = 1;
-  private nextMeasurementId = 1;
+  private nextTerminalId = 1;
 
   async init(): Promise<void> {
     console.warn(
@@ -254,8 +285,11 @@ class WebStubJobsStore implements JobsStore {
   }
 
   private withTotal(j: Omit<Job, 'totalLength'>): Job {
-    const runs = this.measurements.filter((m) => m.jobId === j.id);
-    return { ...j, totalLength: runs.reduce((sum, m) => sum + runLength(m), 0) };
+    return { ...j, totalLength: totalLength(this.terminalsOf(j.id)) };
+  }
+
+  private terminalsOf(jobId: number): Terminal[] {
+    return this.terminals.filter((t) => t.jobId === jobId).sort((a, b) => a.index - b.index);
   }
 
   async getJobs(): Promise<Job[]> {
@@ -275,6 +309,7 @@ class WebStubJobsStore implements JobsStore {
       altitude: fix?.altitude ?? null,
     };
     this.jobs.push(job);
+    await this.insertTerminal(origin(job.id, createdAt));
     return this.withTotal(job);
   }
 
@@ -285,16 +320,16 @@ class WebStubJobsStore implements JobsStore {
 
   async deleteJob(id: number): Promise<void> {
     this.jobs = this.jobs.filter((j) => j.id !== id);
-    this.measurements = this.measurements.filter((m) => m.jobId !== id);
+    this.terminals = this.terminals.filter((t) => t.jobId !== id);
   }
 
-  async getMeasurements(jobId: number): Promise<Measurement[]> {
-    return this.measurements.filter((m) => m.jobId === jobId);
+  async getTerminals(jobId: number): Promise<Terminal[]> {
+    return this.terminalsOf(jobId);
   }
 
-  async insertMeasurement(m: Omit<Measurement, 'id'>): Promise<Measurement> {
-    const saved = { id: this.nextMeasurementId++, ...m };
-    this.measurements.push(saved);
+  async insertTerminal(t: Omit<Terminal, 'id'>): Promise<Terminal> {
+    const saved = { id: this.nextTerminalId++, ...t };
+    this.terminals.push(saved);
     return saved;
   }
 }
