@@ -111,7 +111,7 @@ EOF
     fi
     (cd "$(json "$cap" android.platformDirAbs)" && ./gradlew assembleDebug)
     if [ -d "$dest" ]; then
-      # "Fence Jobs" → fence-jobs-20261124.apk
+      # "Fence-ter" → fence-ter-20261124.apk
       name="$(json "$cap" app.appName | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//')"
       dest="$dest/$name-$(date +%Y%m%d).apk"
     fi

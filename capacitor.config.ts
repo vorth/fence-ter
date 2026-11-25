@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'org.vorthmann.fencejobs',
-  appName: 'Fence Jobs',
+  appId: 'org.vorthmann.fenceter',
+  appName: 'Fence-ter',
   webDir: 'dist',
 };
 

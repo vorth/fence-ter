@@ -1,4 +1,4 @@
-# Fence Jobs
+# Fence-ter
 
 Mobile app (Capacitor 8, iOS + Android) that keeps a record of fencing
 **jobs**. Each job has a name, description, the time and GPS location where
@@ -8,6 +8,10 @@ earlier terminal (ending a **run** from it). Measured with ARKit (iOS) or
 ARCore (Android), camera + motion sensors; phones without either fall back
 to motion-sensor dead reckoning, which the user found far too inaccurate.
 Stored locally in SQLite. Early prototype; no users.
+
+Formerly "Fence Jobs" (app ID `org.vorthmann.fencejobs`); now app/bundle ID
+and Android Java package `org.vorthmann.fenceter`. Only the project
+directory keeps the old name.
 
 The storage architecture follows the user's `../capacitor-poc` (CheckrSpot)
 app; look there for precedents (native plugins, keyboard handling, printing,
@@ -54,7 +58,7 @@ keep it in sync.
     registers it (`SceneDelegate` uses it as root). Added to
     `project.pbxproj` by hand (no synchronized folders). Camera usage string
     in `Info.plist`; ARKit is not a required device capability.
-  - Android: `android/app/src/main/java/org/vorthmann/fencejobs/ARTrackerPlugin.java`,
+  - Android: `android/app/src/main/java/org/vorthmann/fenceter/ARTrackerPlugin.java`,
     registered in `MainActivity`. `com.google.ar:core` 1.57.0 in
     `app/build.gradle`; manifest has `CAMERA`, `camera.ar` not required,
     and `com.google.ar.core` meta-data `optional` (AR Optional: the app

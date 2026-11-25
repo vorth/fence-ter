@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Fence Jobs</string>
+	<string>Fence-ter</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,9 +25,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Fence Jobs uses the camera to track the phone’s position while measuring.</string>
+	<string>Fence-ter uses the camera to track the phone’s position while measuring.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Fence Jobs records where each job is created.</string>
+	<string>Fence-ter records where each job is created.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

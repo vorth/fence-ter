@@ -1,4 +1,4 @@
-package org.vorthmann.fencejobs;
+package org.vorthmann.fenceter;
 
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;

@@ -1,4 +1,4 @@
-package org.vorthmann.fencejobs;
+package org.vorthmann.fenceter;
 
 import android.Manifest;
 import android.content.Context;

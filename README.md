@@ -1,4 +1,4 @@
-# Fence Jobs
+# Fence-ter
 
 A Capacitor app (iOS + Android) for recording fencing jobs: each job gets a
 time and GPS location when it is created, and a set of terminals (measured
@@ -27,7 +27,7 @@ After changing anything in `src/`, run `npm run build && npx cap copy`.
 ```sh
 ./tools.sh iphone <udid>   # Debug build, installed and launched on a USB iPhone
 ./tools.sh ios             # Release archive, uploaded to App Store Connect (TestFlight)
-./tools.sh android <path>  # debug APK copied to <path> (a file, or a directory → fence-jobs-YYYYMMDD.apk)
+./tools.sh android <path>  # debug APK copied to <path> (a file, or a directory → fence-ter-YYYYMMDD.apk)
 ```
 
 Nothing in it is specific to this app, so it can be copied into another
