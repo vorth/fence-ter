@@ -20,6 +20,24 @@ npx cap sync
 
 After changing anything in `src/`, run `npm run build && npx cap copy`.
 
+## Building and deploying
+
+`tools.sh` builds the web app, copies it into the native project and then:
+
+```sh
+./tools.sh iphone <udid>   # Debug build, installed and launched on a USB iPhone
+./tools.sh ios             # Release archive, uploaded to App Store Connect (TestFlight)
+./tools.sh android <path>  # debug APK copied to <path> (a file, or a directory → fence-jobs-YYYYMMDD.apk)
+```
+
+Nothing in it is specific to this app, so it can be copied into another
+Capacitor project: paths and the app name come from `npx cap config --json`,
+the Xcode scheme from the project's target, and the bundle ID from the built
+app. `./tools.sh iphone` without a UDID lists the connected devices. The iOS commands sign with the
+Xcode account's team; `ios` sets the build number to a timestamp
+(`YYYYMMDD.HHMM`) so each upload is higher, without editing the project. The
+app record must already exist in App Store Connect.
+
 ## Using it
 
 1. Tap **New Job**, enter a name and notes, and tap **Create**. The job is

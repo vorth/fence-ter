@@ -30,6 +30,8 @@ keep it in sync.
   `xcodebuild -project ios/App/App.xcodeproj -scheme App -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO`.
   Android: `cd android && ./gradlew assembleDebug`. Don't boot simulators;
   the user tests on their own phone.
+- `tools.sh` (`iphone <udid>` / `ios` / `android <path>`) is the user's
+  build-and-deploy script. Don't run any of these commands unasked.
 
 ## Stack
 
